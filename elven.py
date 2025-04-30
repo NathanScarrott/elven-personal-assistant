@@ -133,8 +133,8 @@ def speak_elevenlabs(text, voice_id=None):
         speak_mac(text)
         return
     if not voice_id:
-        # Default to George, a warm, middle-aged British male voice
-        voice_id = "JBFqnCBsd6RMkjVDRZzb"  # George's voice_id
+        # Default to Beezle Wheezelby
+        voice_id = "BBfN7Spa3cqLPH1xAS22"
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     headers = {
         "xi-api-key": api_key,
