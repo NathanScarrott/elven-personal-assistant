@@ -209,21 +209,35 @@ def list_todoist_tasks(token=TODOIST_API_TOKEN):
     else:
         return f"Failed to fetch tasks: {response.text}"
 
+def get_weather(city, api_key=OPENWEATHERMAP_API_KEY):
+    if not api_key:
+        return "Weather API key not set."
+    url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        temp = data['main']['temp']
+        desc = data['weather'][0]['description']
+        return f"The weather in {city} is {desc} with a temperature of {temp}°C."
+    else:
+        return f"Could not fetch weather for {city}."
+
 def classify_intent_and_entities(transcription):
     api_key = OPENROUTER_API_KEY
     if not api_key:
         print("[ERROR] OPENROUTER_API_KEY not set.")
-        return {"intent": "general", "task": None, "due": None}
+        return {"intent": "general", "task": None, "due": None, "location": None}
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=api_key,
     )
     system_prompt = (
         "You are an intent and entity extraction assistant for a voice AI. "
-        "Classify the user's request as one of: 'todoist_add', 'todoist_list', or 'general'. "
+        "Classify the user's request as one of: 'todoist_add', 'todoist_list', 'weather', or 'general'. "
         "If the intent is 'todoist_add', extract the task content and any due date (e.g., today, tomorrow, next week, or a weekday). "
         "If the intent is 'todoist_list', no task or due is needed. "
-        "Reply in JSON: {intent: <intent>, task: <task or null>, due: <due or null>}"
+        "If the intent is 'weather', extract the location (city or place) if present. "
+        "Reply in JSON: {intent: <intent>, task: <task or null>, due: <due or null>, location: <location or null>}"
     )
     completion = client.chat.completions.create(
         model="openai/gpt-4o",
@@ -235,17 +249,15 @@ def classify_intent_and_entities(transcription):
     )
     import json
     import re as regex
-    # Extract JSON from the response
     response_text = completion.choices[0].message.content
     try:
-        # Try to find JSON in the response
         match = regex.search(r'\{.*\}', response_text, regex.DOTALL)
         if match:
             return json.loads(match.group(0))
         return json.loads(response_text)
     except Exception as e:
         print(f"[WARN] Could not parse LLM intent response: {e}\n{response_text}")
-        return {"intent": "general", "task": None, "due": None}
+        return {"intent": "general", "task": None, "due": None, "location": None}
 
 def main():
     print("Elven Personal Assistant starting up...")
@@ -262,6 +274,7 @@ def main():
         intent = intent_data.get("intent")
         task = intent_data.get("task")
         due = intent_data.get("due")
+        location = intent_data.get("location")
         if intent == "todoist_add" and task:
             result = add_todoist_task(task if not due else f"{task} {due}", token=TODOIST_API_TOKEN)
             print(result)
@@ -269,6 +282,11 @@ def main():
             continue
         elif intent == "todoist_list":
             result = list_todoist_tasks(token=TODOIST_API_TOKEN)
+            print(result)
+            speak_elevenlabs(result)
+            continue
+        elif intent == "weather" and location:
+            result = get_weather(location)
             print(result)
             speak_elevenlabs(result)
             continue
