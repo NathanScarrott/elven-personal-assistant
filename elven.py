@@ -27,11 +27,12 @@ GOOGLE_CALENDAR_API_KEY = os.getenv('GOOGLE_CALENDAR_API_KEY')
 NOTION_API_KEY = os.getenv('NOTION_API_KEY')
 OPENWEATHERMAP_API_KEY = os.getenv('OPENWEATHERMAP_API_KEY')
 GOOGLE_SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
+PORCUPINE_ACCESS_KEY = os.getenv('PORCUPINE_ACCESS_KEY')
 
 
 def listen_for_wake_word():
-    print("Listening for wake word ('hey assistant')...")
-    porcupine = pvporcupine.create(keywords=["hey assistant"])
+    print("Listening for wake word ('terminator')...")
+    porcupine = pvporcupine.create(access_key=PORCUPINE_ACCESS_KEY, keywords=["terminator"])
     pa = pyaudio.PyAudio()
     audio_stream = pa.open(
         rate=porcupine.sample_rate,
