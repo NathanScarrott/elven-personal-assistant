@@ -3,6 +3,11 @@ from dotenv import load_dotenv
 import pvporcupine
 import pyaudio
 import struct
+import wave
+import whisper
+import time
+import subprocess
+import requests
 
 # Load environment variables from .env.local
 load_dotenv('.env.local')
@@ -29,6 +34,49 @@ OPENWEATHERMAP_API_KEY = os.getenv('OPENWEATHERMAP_API_KEY')
 GOOGLE_SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
 PORCUPINE_ACCESS_KEY = os.getenv('PORCUPINE_ACCESS_KEY')
 
+def record_audio(filename="command.wav", sample_rate=16000, silence_threshold=500, silence_duration=2.0):
+    print("Recording... Speak now!")
+    pa = pyaudio.PyAudio()
+    stream = pa.open(format=pyaudio.paInt16,
+                    channels=1,
+                    rate=sample_rate,
+                    input=True,
+                    frames_per_buffer=1024)
+    frames = []
+    silent_chunks = 0
+    required_silent_chunks = int((sample_rate / 1024) * silence_duration)
+    print("(Recording will stop after 2 seconds of silence)")
+    while True:
+        data = stream.read(1024, exception_on_overflow=False)
+        frames.append(data)
+        # Convert bytes to integers for energy calculation
+        audio_data = struct.unpack(str(len(data)//2) + 'h', data)
+        energy = max(abs(sample) for sample in audio_data)
+        if energy < silence_threshold:
+            silent_chunks += 1
+        else:
+            silent_chunks = 0
+        if silent_chunks > required_silent_chunks:
+            print("Silence detected. Stopping recording.")
+            break
+    stream.stop_stream()
+    stream.close()
+    pa.terminate()
+    wf = wave.open(filename, 'wb')
+    wf.setnchannels(1)
+    wf.setsampwidth(pa.get_sample_size(pyaudio.paInt16))
+    wf.setframerate(sample_rate)
+    wf.writeframes(b''.join(frames))
+    wf.close()
+    print(f"Audio recorded to {filename}")
+    return filename
+
+def transcribe_audio(path):
+    print("Transcribing audio...")
+    model = whisper.load_model("base")
+    result = model.transcribe(path)
+    print("Transcription:", result["text"])
+    return result["text"]
 
 def listen_for_wake_word():
     print("Listening for wake word ('terminator')...")
@@ -55,11 +103,44 @@ def listen_for_wake_word():
         pa.terminate()
         porcupine.delete()
 
+def speak_mac(text):
+    # Use macOS 'say' command for TTS
+    subprocess.run(["say", text])
+
+def speak_elevenlabs(text, voice_id=None):
+    api_key = ELEVENLABS_API_KEY
+    if not api_key:
+        print("[WARN] ELEVENLABS_API_KEY not set. Falling back to macOS say.")
+        speak_mac(text)
+        return
+    if not voice_id:
+        # Default to Rachel, a popular ElevenLabs voice
+        voice_id = "21m00Tcm4TlvDq8ikWAM"  # Rachel's voice_id
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    headers = {
+        "xi-api-key": api_key,
+        "Content-Type": "application/json"
+    }
+    data = {
+        "text": text,
+        "model_id": "eleven_monolingual_v1"
+    }
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 200:
+        with open("output.mp3", "wb") as f:
+            f.write(response.content)
+        # Play the audio on macOS
+        subprocess.run(["afplay", "output.mp3"])
+    else:
+        print(f"[ERROR] ElevenLabs API error: {response.status_code} {response.text}")
+        speak_mac(text)
+
 def main():
     print("Elven Personal Assistant starting up...")
     listen_for_wake_word()
-    # TODO: Listen for activation and record audio
-    # TODO: Transcribe audio using Whisper
+    audio_path = record_audio()
+    speak_elevenlabs("Processing")
+    transcribe_audio(audio_path)
     # TODO: Process command with GPT-4 (OpenRouter)
     # TODO: Execute actions (Todoist, Email, etc.)
     # TODO: Respond with TTS (Eleven Labs)
