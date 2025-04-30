@@ -1,0 +1,6 @@
+pvporcupine
+pyaudio
+git+https://github.com/openai/whisper.git
+openai
+requests
+python-dotenv 
