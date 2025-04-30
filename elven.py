@@ -41,6 +41,9 @@ PORCUPINE_ACCESS_KEY = os.getenv('PORCUPINE_ACCESS_KEY')
 
 STOP_PHRASES = ["goodbye"]
 
+INTENT_MODEL = "google/gemini-2.5-flash-preview"
+RESPONSE_MODEL = "google/gemini-2.5-flash-preview"
+
 def record_audio(filename="command.wav", sample_rate=16000, silence_threshold=500, silence_duration=2.0):
     print("Recording... Speak now!")
     pa = pyaudio.PyAudio()
@@ -50,13 +53,22 @@ def record_audio(filename="command.wav", sample_rate=16000, silence_threshold=50
                     input=True,
                     frames_per_buffer=1024)
     frames = []
+    print("(Waiting for you to start speaking...)")
+    # Wait for user to start speaking
+    while True:
+        data = stream.read(1024, exception_on_overflow=False)
+        audio_data = struct.unpack(str(len(data)//2) + 'h', data)
+        energy = max(abs(sample) for sample in audio_data)
+        if energy > silence_threshold:
+            frames.append(data)
+            print("Speech detected. Recording...")
+            break
+    # Now record until 2 seconds of silence
     silent_chunks = 0
     required_silent_chunks = int((sample_rate / 1024) * silence_duration)
-    print("(Recording will stop after 2 seconds of silence)")
     while True:
         data = stream.read(1024, exception_on_overflow=False)
         frames.append(data)
-        # Convert bytes to integers for energy calculation
         audio_data = struct.unpack(str(len(data)//2) + 'h', data)
         energy = max(abs(sample) for sample in audio_data)
         if energy < silence_threshold:
@@ -154,15 +166,13 @@ def ask_gpt_openrouter(prompt):
     system_prompt = (
         "You are Elven, a wise, helpful, and friendly AI assistant with a touch of fantasy. "
         "You speak concisely, with a gentle and encouraging tone, as if you are a trusted magical guide. "
-        "Keep your answers short and to the point within 25 words."
+        "Keep your answers short and to the point within 25 words. "
+        "Do not include any Markdown, asterisks, or model names in your response. "
+        "Do not mention you are an AI or language model. Speak as Elven only."
     )
+    print(f"[Main Response] Using model: {RESPONSE_MODEL}")
     completion = client.chat.completions.create(
-        extra_headers={
-            # Optionally set your site info here
-            # "HTTP-Referer": "<YOUR_SITE_URL>",
-            # "X-Title": "<YOUR_SITE_NAME>",
-        },
-        model="openai/gpt-4o",
+        model=RESPONSE_MODEL,
         max_tokens=40,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -226,21 +236,24 @@ def classify_intent_and_entities(transcription):
     api_key = OPENROUTER_API_KEY
     if not api_key:
         print("[ERROR] OPENROUTER_API_KEY not set.")
-        return {"intent": "general", "task": None, "due": None, "location": None}
+        return {"intent": None, "task": None, "due": None, "location": None}
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=api_key,
     )
     system_prompt = (
         "You are an intent and entity extraction assistant for a voice AI. "
-        "Classify the user's request as one of: 'todoist_add', 'todoist_list', 'weather', or 'general'. "
+        "Classify the user's request as one of: 'todoist_add', 'todoist_list', 'weather', or 'null'. "
+        "If the user's message is just conversation, a question, or does not match any special function, use 'null' as the intent. "
         "If the intent is 'todoist_add', extract the task content and any due date (e.g., today, tomorrow, next week, or a weekday). "
         "If the intent is 'todoist_list', no task or due is needed. "
         "If the intent is 'weather', extract the location (city or place) if present. "
-        "Reply in JSON: {intent: <intent>, task: <task or null>, due: <due or null>, location: <location or null>}"
+        "Reply ONLY in this format: <json>{\"intent\": \"<intent>\", \"task\": <task or null>, \"due\": <due or null>, \"location\": <location or null>}</json>. "
+        "Use double quotes for all property names and string values."
     )
+    print(f"[Intent Extraction] Using model: {INTENT_MODEL}")
     completion = client.chat.completions.create(
-        model="openai/gpt-4o",
+        model=INTENT_MODEL,
         max_tokens=100,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -251,13 +264,18 @@ def classify_intent_and_entities(transcription):
     import re as regex
     response_text = completion.choices[0].message.content
     try:
+        # Extract JSON from <json>...</json> tags
+        match = regex.search(r'<json>\s*(\{.*?\})\s*</json>', response_text, regex.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+        # Fallback: try to find any JSON
         match = regex.search(r'\{.*\}', response_text, regex.DOTALL)
         if match:
             return json.loads(match.group(0))
         return json.loads(response_text)
     except Exception as e:
         print(f"[WARN] Could not parse LLM intent response: {e}\n{response_text}")
-        return {"intent": "general", "task": None, "due": None, "location": None}
+        return {"intent": None, "task": None, "due": None, "location": None}
 
 def main():
     print("Elven Personal Assistant starting up...")
@@ -290,7 +308,6 @@ def main():
             print(result)
             speak_elevenlabs(result)
             continue
-        print("Sending to GPT-4o via OpenRouter...")
         gpt_response = ask_gpt_openrouter(transcription)
         print("AI Response:", gpt_response)
         speak_elevenlabs(gpt_response)
