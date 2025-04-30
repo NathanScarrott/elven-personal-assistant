@@ -10,6 +10,7 @@ import subprocess
 import requests
 from openai import OpenAI
 import warnings
+import re
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -79,8 +80,8 @@ def record_audio(filename="command.wav", sample_rate=16000, silence_threshold=50
 
 def transcribe_audio(path):
     print("Transcribing audio...")
-    model = whisper.load_model("base")
-    result = model.transcribe(path)
+    model = whisper.load_model("tiny")
+    result = model.transcribe(path, language="en")
     print("Transcription:", result["text"])
     return result["text"]
 
@@ -170,6 +171,82 @@ def ask_gpt_openrouter(prompt):
     )
     return completion.choices[0].message.content
 
+def add_todoist_task(task, token=TODOIST_API_TOKEN):
+    # Extract due date if present
+    due_phrases = ["today", "tomorrow", "tonight", "this week", "next week", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    due_string = None
+    for phrase in due_phrases:
+        if phrase in task.lower():
+            due_string = phrase
+            # Remove the due phrase from the task content
+            task = re.sub(rf"\b{phrase}\b", "", task, flags=re.IGNORECASE).strip()
+            break
+    headers = {"Authorization": f"Bearer {token}"}
+    data = {"content": task}
+    if due_string:
+        data["due_string"] = due_string
+    response = requests.post(
+        "https://api.todoist.com/rest/v2/tasks", headers=headers, json=data
+    )
+    if response.status_code == 200 or response.status_code == 204:
+        if due_string:
+            return f"Task added: {task} (due {due_string})"
+        else:
+            return f"Task added: {task}"
+    else:
+        return f"Failed to add task: {response.text}"
+
+def list_todoist_tasks(token=TODOIST_API_TOKEN):
+    headers = {"Authorization": f"Bearer {token}"}
+    response = requests.get(
+        "https://api.todoist.com/rest/v2/tasks", headers=headers
+    )
+    if response.status_code == 200:
+        tasks = response.json()
+        if not tasks:
+            return "You have no tasks."
+        return "Your tasks are: " + ", ".join(task["content"] for task in tasks)
+    else:
+        return f"Failed to fetch tasks: {response.text}"
+
+def classify_intent_and_entities(transcription):
+    api_key = OPENROUTER_API_KEY
+    if not api_key:
+        print("[ERROR] OPENROUTER_API_KEY not set.")
+        return {"intent": "general", "task": None, "due": None}
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+    )
+    system_prompt = (
+        "You are an intent and entity extraction assistant for a voice AI. "
+        "Classify the user's request as one of: 'todoist_add', 'todoist_list', or 'general'. "
+        "If the intent is 'todoist_add', extract the task content and any due date (e.g., today, tomorrow, next week, or a weekday). "
+        "If the intent is 'todoist_list', no task or due is needed. "
+        "Reply in JSON: {intent: <intent>, task: <task or null>, due: <due or null>}"
+    )
+    completion = client.chat.completions.create(
+        model="openai/gpt-4o",
+        max_tokens=100,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcription}
+        ]
+    )
+    import json
+    import re as regex
+    # Extract JSON from the response
+    response_text = completion.choices[0].message.content
+    try:
+        # Try to find JSON in the response
+        match = regex.search(r'\{.*\}', response_text, regex.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return json.loads(response_text)
+    except Exception as e:
+        print(f"[WARN] Could not parse LLM intent response: {e}\n{response_text}")
+        return {"intent": "general", "task": None, "due": None}
+
 def main():
     print("Elven Personal Assistant starting up...")
     listen_for_wake_word()  # Only at the start
@@ -180,6 +257,21 @@ def main():
             print("Conversation ended by user.")
             speak_elevenlabs("Goodbye.")
             break
+        # LLM-based intent and entity extraction
+        intent_data = classify_intent_and_entities(transcription)
+        intent = intent_data.get("intent")
+        task = intent_data.get("task")
+        due = intent_data.get("due")
+        if intent == "todoist_add" and task:
+            result = add_todoist_task(task if not due else f"{task} {due}", token=TODOIST_API_TOKEN)
+            print(result)
+            speak_elevenlabs(result)
+            continue
+        elif intent == "todoist_list":
+            result = list_todoist_tasks(token=TODOIST_API_TOKEN)
+            print(result)
+            speak_elevenlabs(result)
+            continue
         print("Sending to GPT-4o via OpenRouter...")
         gpt_response = ask_gpt_openrouter(transcription)
         print("AI Response:", gpt_response)
