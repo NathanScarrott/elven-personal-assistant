@@ -1,3 +1,4 @@
-.env.local 
+# Ignore sensitive and generated files
+.env.local
 command.wav
 output.mp3
