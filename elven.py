@@ -8,6 +8,7 @@ import whisper
 import time
 import subprocess
 import requests
+from openai import OpenAI
 
 # Load environment variables from .env.local
 load_dotenv('.env.local')
@@ -33,6 +34,8 @@ NOTION_API_KEY = os.getenv('NOTION_API_KEY')
 OPENWEATHERMAP_API_KEY = os.getenv('OPENWEATHERMAP_API_KEY')
 GOOGLE_SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
 PORCUPINE_ACCESS_KEY = os.getenv('PORCUPINE_ACCESS_KEY')
+
+STOP_PHRASES = ["end conversation"]
 
 def record_audio(filename="command.wav", sample_rate=16000, silence_threshold=500, silence_duration=2.0):
     print("Recording... Speak now!")
@@ -114,8 +117,8 @@ def speak_elevenlabs(text, voice_id=None):
         speak_mac(text)
         return
     if not voice_id:
-        # Default to Rachel, a popular ElevenLabs voice
-        voice_id = "21m00Tcm4TlvDq8ikWAM"  # Rachel's voice_id
+        # Default to George, a warm, middle-aged British male voice
+        voice_id = "JBFqnCBsd6RMkjVDRZzb"  # George's voice_id
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     headers = {
         "xi-api-key": api_key,
@@ -135,16 +138,55 @@ def speak_elevenlabs(text, voice_id=None):
         print(f"[ERROR] ElevenLabs API error: {response.status_code} {response.text}")
         speak_mac(text)
 
+def ask_gpt_openrouter(prompt):
+    api_key = OPENROUTER_API_KEY
+    if not api_key:
+        print("[ERROR] OPENROUTER_API_KEY not set.")
+        return "I'm sorry, I can't process your request right now."
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+    )
+    system_prompt = (
+        "You are Elven, a wise, helpful, and friendly AI assistant with a touch of fantasy. "
+        "You speak concisely, with a gentle and encouraging tone, as if you are a trusted magical guide. "
+        "Keep your answers short and to the point within 40 tokens."
+    )
+    completion = client.chat.completions.create(
+        extra_headers={
+            # Optionally set your site info here
+            # "HTTP-Referer": "<YOUR_SITE_URL>",
+            # "X-Title": "<YOUR_SITE_NAME>",
+        },
+        model="openai/gpt-4o",
+        max_tokens=40,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+    )
+    return completion.choices[0].message.content
+
 def main():
     print("Elven Personal Assistant starting up...")
-    listen_for_wake_word()
-    audio_path = record_audio()
-    speak_elevenlabs("Processing")
-    transcribe_audio(audio_path)
-    # TODO: Process command with GPT-4 (OpenRouter)
-    # TODO: Execute actions (Todoist, Email, etc.)
-    # TODO: Respond with TTS (Eleven Labs)
-    pass
+    listen_for_wake_word()  # Only at the start
+    while True:
+        audio_path = record_audio()
+        speak_elevenlabs("Processing")
+        transcription = transcribe_audio(audio_path)
+        if any(phrase in transcription.lower() for phrase in STOP_PHRASES):
+            print("Conversation ended by user.")
+            speak_elevenlabs("Goodbye.")
+            break
+        print("Sending to GPT-4o via OpenRouter...")
+        gpt_response = ask_gpt_openrouter(transcription)
+        print("AI Response:", gpt_response)
+        speak_elevenlabs(gpt_response)
+        if any(phrase in gpt_response.lower() for phrase in STOP_PHRASES):
+            print("Conversation ended by assistant.")
+            break
+        # TODO: Execute actions (Todoist, Email, etc.)
+        pass
 
 if __name__ == "__main__":
     main() 
