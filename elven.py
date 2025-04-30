@@ -9,6 +9,9 @@ import time
 import subprocess
 import requests
 from openai import OpenAI
+import warnings
+
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # Load environment variables from .env.local
 load_dotenv('.env.local')
