@@ -35,7 +35,7 @@ OPENWEATHERMAP_API_KEY = os.getenv('OPENWEATHERMAP_API_KEY')
 GOOGLE_SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
 PORCUPINE_ACCESS_KEY = os.getenv('PORCUPINE_ACCESS_KEY')
 
-STOP_PHRASES = ["end conversation"]
+STOP_PHRASES = ["goodbye"]
 
 def record_audio(filename="command.wav", sample_rate=16000, silence_threshold=500, silence_duration=2.0):
     print("Recording... Speak now!")
@@ -150,7 +150,7 @@ def ask_gpt_openrouter(prompt):
     system_prompt = (
         "You are Elven, a wise, helpful, and friendly AI assistant with a touch of fantasy. "
         "You speak concisely, with a gentle and encouraging tone, as if you are a trusted magical guide. "
-        "Keep your answers short and to the point within 40 tokens."
+        "Keep your answers short and to the point within 25 words."
     )
     completion = client.chat.completions.create(
         extra_headers={
@@ -172,7 +172,6 @@ def main():
     listen_for_wake_word()  # Only at the start
     while True:
         audio_path = record_audio()
-        speak_elevenlabs("Processing")
         transcription = transcribe_audio(audio_path)
         if any(phrase in transcription.lower() for phrase in STOP_PHRASES):
             print("Conversation ended by user.")
