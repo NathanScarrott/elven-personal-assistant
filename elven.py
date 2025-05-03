@@ -92,7 +92,7 @@ def record_audio(filename="command.wav", sample_rate=16000, silence_threshold=50
 
 def transcribe_audio(path):
     print("Transcribing audio...")
-    model = whisper.load_model("tiny")
+    model = whisper.load_model("small")
     result = model.transcribe(path, language="en")
     print("Transcription:", result["text"])
     return result["text"]
