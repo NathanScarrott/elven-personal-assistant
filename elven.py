@@ -38,6 +38,7 @@ NOTION_API_KEY = os.getenv('NOTION_API_KEY')
 OPENWEATHERMAP_API_KEY = os.getenv('OPENWEATHERMAP_API_KEY')
 GOOGLE_SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
 PORCUPINE_ACCESS_KEY = os.getenv('PORCUPINE_ACCESS_KEY')
+PHI2_API_URL = os.getenv('PHI2_API_URL', 'http://localhost:8000')
 
 STOP_PHRASES = ["goodbye"]
 
@@ -233,89 +234,157 @@ def get_weather(city, api_key=OPENWEATHERMAP_API_KEY):
         return f"Could not fetch weather for {city}."
 
 def classify_intent_and_entities(transcription):
-    api_key = OPENROUTER_API_KEY
-    if not api_key:
-        print("[ERROR] OPENROUTER_API_KEY not set.")
-        return {"intent": None, "task": None, "due": None, "location": None}
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
-    )
-    system_prompt = (
-        "You are an intent and entity extraction assistant for a voice AI. "
-        "Classify the user's request as one of: 'todoist_add', 'todoist_list', 'weather', or 'null'. "
-        "If the user's message is just conversation, a question, or does not match any special function, use 'null' as the intent. "
-        "If the intent is 'todoist_add', extract the task content and any due date (e.g., today, tomorrow, next week, or a weekday). "
-        "If the intent is 'todoist_list', no task or due is needed. "
-        "If the intent is 'weather', extract the location (city or place) if present. "
-        "Reply ONLY in this format: <json>{\"intent\": \"<intent>\", \"task\": <task or null>, \"due\": <due or null>, \"location\": <location or null>}</json>. "
-        "Use double quotes for all property names and string values."
-    )
-    print(f"[Intent Extraction] Using model: {INTENT_MODEL}")
-    completion = client.chat.completions.create(
-        model=INTENT_MODEL,
-        max_tokens=100,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": transcription}
-        ]
-    )
-    import json
-    import re as regex
-    response_text = completion.choices[0].message.content
+    """
+    Classify intent and extract entities using local FastAPI endpoint with Phi-2 model.
+    
+    Args:
+        transcription (str): The transcribed user speech
+        
+    Returns:
+        dict: Intent classification with format:
+              {"intent": str, "task": str|None, "due": str|None, "location": str|None}
+    """
+    api_url = PHI2_API_URL
+    if not api_url:
+        print("[ERROR] PHI2_API_URL not set. Falling back to null intent.")
+        return {"intent": "null", "task": None, "due": None, "location": None}
+    
+    # Prepare the request
+    endpoint = f"{api_url.rstrip('/')}/api/convert"
+    payload = {"text": transcription}
+    
     try:
-        # Extract JSON from <json>...</json> tags
-        match = regex.search(r'<json>\s*(\{.*?\})\s*</json>', response_text, regex.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-        # Fallback: try to find any JSON
-        match = regex.search(r'\{.*\}', response_text, regex.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        return json.loads(response_text)
+        print(f"[Intent Extraction] Calling local API: {endpoint}")
+        response = requests.post(
+            endpoint,
+            json=payload,
+            timeout=30,  # 30-second timeout
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code != 200:
+            print(f"[ERROR] API returned status {response.status_code}: {response.text}")
+            return {"intent": "null", "task": None, "due": None, "location": None}
+        
+        # Parse the response
+        try:
+            api_response = response.json()
+            print(f"[DEBUG] Raw API Response: {api_response}")
+        except ValueError as e:
+            print(f"[ERROR] Failed to parse JSON response: {e}")
+            return {"intent": "null", "task": None, "due": None, "location": None}
+        
+        # Handle different response formats
+        if "structured_data" in api_response:
+            # Format from actual Phi-2 API
+            structured_data = api_response["structured_data"]
+            api_intent = structured_data.get("intent", "").lower()
+            task = structured_data.get("task")
+            location = structured_data.get("location")
+            schedule = structured_data.get("schedule") or structured_data.get("datetime")
+        else:
+            # Format from mock API
+            api_intent = api_response.get("intent", "").lower()
+            task = api_response.get("task")
+            location = api_response.get("location") 
+            schedule = api_response.get("due_date")
+        
+        # Use model's intent directly (no mapping needed)
+        result = {
+            "intent": api_intent,  # Use your model's intent directly
+            "task": None,
+            "due": None,
+            "location": None
+        }
+        
+        if api_intent == "add_task":
+            # Extract task and due date
+            result["task"] = task
+            result["due"] = schedule
+            
+        elif api_intent == "get_weather":
+            # Extract location
+            result["location"] = location
+            
+        elif api_intent == "send_email":
+            # Could extract recipient, subject, body in the future
+            pass
+        
+        print(f"[Intent Extraction] Result: {result}")
+        return result
+        
+    except requests.exceptions.Timeout:
+        print("[ERROR] API request timed out (30 seconds)")
+        return {"intent": "null", "task": None, "due": None, "location": None}
+    
+    except requests.exceptions.ConnectionError:
+        print(f"[ERROR] Could not connect to API at {endpoint}")
+        return {"intent": "null", "task": None, "due": None, "location": None}
+    
     except Exception as e:
-        print(f"[WARN] Could not parse LLM intent response: {e}\n{response_text}")
-        return {"intent": None, "task": None, "due": None, "location": None}
+        print(f"[ERROR] Unexpected error calling API: {e}")
+        return {"intent": "null", "task": None, "due": None, "location": None}
 
 def main():
-    print("Elven Personal Assistant starting up...")
-    listen_for_wake_word()  # Only at the start
+    print("🎤 Elven Personal Assistant starting up...")
+    print("📝 No wake word needed - press Enter to record each command")
+    print("💬 Say 'goodbye' or 'quit' to exit")
+    print("=" * 50)
+    
     while True:
+        # Wait for user to press Enter
+        try:
+            input("\n🔴 Press Enter to start recording (or Ctrl+C to quit)...")
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye!")
+            break
+            
+        print("🎙️  Recording... Speak now!")
         audio_path = record_audio()
+        
+        print("🔄 Transcribing audio...")
         transcription = transcribe_audio(audio_path)
-        if any(phrase in transcription.lower() for phrase in STOP_PHRASES):
+        
+        # Check for exit commands
+        if any(phrase in transcription.lower() for phrase in STOP_PHRASES + ["quit", "exit"]):
             print("Conversation ended by user.")
             speak_elevenlabs("Goodbye.")
             break
+            
+        print(f"📝 You said: '{transcription}'")
+        
         # LLM-based intent and entity extraction
+        print("🧠 Processing with Phi-2...")
         intent_data = classify_intent_and_entities(transcription)
         intent = intent_data.get("intent")
         task = intent_data.get("task")
         due = intent_data.get("due")
         location = intent_data.get("location")
-        if intent == "todoist_add" and task:
+        
+        # Change this part in main():
+        if intent == "add_task" and task:  # ← Changed from "todoist_add" 
             result = add_todoist_task(task if not due else f"{task} {due}", token=TODOIST_API_TOKEN)
-            print(result)
+            print(f"✅ {result}")
             speak_elevenlabs(result)
-            continue
-        elif intent == "todoist_list":
-            result = list_todoist_tasks(token=TODOIST_API_TOKEN)
-            print(result)
-            speak_elevenlabs(result)
-            continue
-        elif intent == "weather" and location:
+            
+        elif intent == "get_weather" and location:  # ← Changed from "weather"
             result = get_weather(location)
-            print(result)
+            print(f"🌤️  {result}")
             speak_elevenlabs(result)
-            continue
-        gpt_response = ask_gpt_openrouter(transcription)
-        print("AI Response:", gpt_response)
-        speak_elevenlabs(gpt_response)
-        if any(phrase in gpt_response.lower() for phrase in STOP_PHRASES):
-            print("Conversation ended by assistant.")
-            break
-        # TODO: Execute actions (Todoist, Email, etc.)
-        pass
+            
+        elif intent == "send_email":  # ← Handle this appropriately
+            print("📧 Email functionality not implemented yet")
+            speak_elevenlabs("Email functionality is not available yet.")
+            
+        else:
+            # General conversation
+            gpt_response = ask_gpt_openrouter(transcription)
+            print(f"🤖 AI Response: {gpt_response}")
+            speak_elevenlabs(gpt_response)
+            
+            if any(phrase in gpt_response.lower() for phrase in STOP_PHRASES):
+                print("Conversation ended by assistant.")
+                break
 
 if __name__ == "__main__":
     main() 
