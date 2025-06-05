@@ -1,4 +1,8 @@
 # Ignore sensitive and generated files
 .env.local
 command.wav
-output.mp3__pycache__/
+output.mp3
+__pycache__/
+elven-env/
+*.pyc
+.DS_Store
