@@ -1,4 +1,4 @@
 # Ignore sensitive and generated files
 .env.local
 command.wav
-output.mp3
+output.mp3__pycache__/
