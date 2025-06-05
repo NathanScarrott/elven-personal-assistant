@@ -11,6 +11,8 @@ import requests
 from openai import OpenAI
 import warnings
 import re
+import edge_tts
+import asyncio
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -127,33 +129,37 @@ def speak_mac(text):
     # Use macOS 'say' command for TTS
     subprocess.run(["say", text])
 
-def speak_elevenlabs(text, voice_id=None):
-    api_key = ELEVENLABS_API_KEY
-    if not api_key:
-        print("[WARN] ELEVENLABS_API_KEY not set. Falling back to macOS say.")
-        speak_mac(text)
-        return
-    if not voice_id:
-        # Default to Beezle Wheezelby
-        voice_id = "BBfN7Spa3cqLPH1xAS22"
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    headers = {
-        "xi-api-key": api_key,
-        "Content-Type": "application/json"
-    }
-    data = {
-        "text": text,
-        "model_id": "eleven_monolingual_v1"
-    }
-    response = requests.post(url, headers=headers, json=data)
-    if response.status_code == 200:
-        with open("output.mp3", "wb") as f:
-            f.write(response.content)
+async def speak_edge_tts_async(text):
+    """Use Microsoft Edge TTS for high-quality speech synthesis"""
+    try:
+        # Other voices:
+        # "en-GB-RyanNeural"
+
+        voice = "en-GB-ThomasNeural" 
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save("output.mp3")
+        
         # Play the audio on macOS
         subprocess.run(["afplay", "output.mp3"])
-    else:
-        print(f"[ERROR] ElevenLabs API error: {response.status_code} {response.text}")
+        
+    except Exception as e:
+        print(f"[ERROR] Edge TTS error: {e}")
+        print("[INFO] Falling back to macOS say command")
         speak_mac(text)
+
+def speak_edge_tts(text):
+    """Synchronous wrapper for Edge TTS"""
+    try:
+        # Run the async function
+        asyncio.run(speak_edge_tts_async(text))
+    except Exception as e:
+        print(f"[ERROR] Edge TTS wrapper error: {e}")
+        speak_mac(text)
+
+def speak_elevenlabs(text, voice_id=None):
+    """DEPRECATED: ElevenLabs TTS - now uses Edge TTS by default"""
+    print("[INFO] Using Edge TTS instead of ElevenLabs")
+    speak_edge_tts(text)
 
 def ask_gpt_openrouter(prompt):
     api_key = OPENROUTER_API_KEY
@@ -327,6 +333,7 @@ def classify_intent_and_entities(transcription):
 
 def main():
     print("🎤 Elven Personal Assistant starting up...")
+    print("🔊 Using Microsoft Edge TTS for high-quality speech synthesis")
     print("📝 No wake word needed - press Enter to record each command")
     print("💬 Say 'goodbye' or 'quit' to exit")
     print("=" * 50)
@@ -348,7 +355,7 @@ def main():
         # Check for exit commands
         if any(phrase in transcription.lower() for phrase in STOP_PHRASES + ["quit", "exit"]):
             print("Conversation ended by user.")
-            speak_elevenlabs("Goodbye.")
+            speak_edge_tts("Goodbye.")
             break
             
         print(f"📝 You said: '{transcription}'")
@@ -365,22 +372,22 @@ def main():
         if intent == "add_task" and task:  # ← Changed from "todoist_add" 
             result = add_todoist_task(task if not due else f"{task} {due}", token=TODOIST_API_TOKEN)
             print(f"✅ {result}")
-            speak_elevenlabs(result)
+            speak_edge_tts(result)
             
         elif intent == "get_weather" and location:  # ← Changed from "weather"
             result = get_weather(location)
             print(f"🌤️  {result}")
-            speak_elevenlabs(result)
+            speak_edge_tts(result)
             
         elif intent == "send_email":  # ← Handle this appropriately
             print("📧 Email functionality not implemented yet")
-            speak_elevenlabs("Email functionality is not available yet.")
+            speak_edge_tts("Email functionality is not available yet.")
             
         else:
             # General conversation
             gpt_response = ask_gpt_openrouter(transcription)
             print(f"🤖 AI Response: {gpt_response}")
-            speak_elevenlabs(gpt_response)
+            speak_edge_tts(gpt_response)
             
             if any(phrase in gpt_response.lower() for phrase in STOP_PHRASES):
                 print("Conversation ended by assistant.")
